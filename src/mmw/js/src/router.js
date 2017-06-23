@@ -72,10 +72,15 @@ var AppRouter = PatchedRouter.extend({
 
         if (this._previousRouteName) {
             var prevContext = this._routeContext[this._previousRouteName],
+                confirmLeave = this.getSuffixMethod(prevContext, 'ConfirmLeave'),
                 cleanUp = this.getSuffixMethod(prevContext, 'CleanUp');
-            this._sequence = this._sequence.then(function() {
-                return cleanUp.apply(null, args);
-            });
+            this._sequence = this._sequence
+                .then(function() {
+                    return confirmLeave.apply(null, args);
+                })
+                .then(function() {
+                    return cleanUp.apply(null, args);
+                });
         }
 
         var self = this;

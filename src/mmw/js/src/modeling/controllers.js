@@ -6,6 +6,8 @@ var $ = require('jquery'),
     App = require('../app'),
     settings = require('../core/settings'),
     router = require('../router').router,
+    modalViews = require('../core/modals/views'),
+    modalModels = require('../core/modals/models'),
     views = require('./views'),
     models = require('./models');
 
@@ -105,6 +107,19 @@ var ModelingController = {
             }
             setPageTitle();
         }
+
+        // Listen for the user trying to leave the site, and warn if their project
+        // is unsaved
+        window.addEventListener("beforeunload", function (e) {
+            if (project.isNew() ||
+                project.get('is_saving') ||
+                project.get('has_saving_scenarios')) {
+                    var confirmationMessage = "Changes you made may not be saved.";
+                    e.returnValue = confirmationMessage;     // Gecko, Trident, Chrome 34+
+                    return confirmationMessage;              // Gecko, WebKit, Chrome <34
+            }
+            return null;
+        });
     },
 
     makeNewProject: function(modelPackage) {
@@ -134,6 +149,10 @@ var ModelingController = {
             updateUrl();
             setPageTitle();
         }
+    },
+
+    makeNewProjectConfirmLeave: function() {
+        return confirmLeaveDeferred();
     },
 
     projectCleanUp: function() {
@@ -355,6 +374,27 @@ function reinstateProject(number, lock) {
     return project;
 }
 
+function confirmLeaveDeferred() {
+    var confirmExitModal = new modalViews.ConfirmView({
+            model: new modalModels.ConfirmModel({
+                question: 'Are you sure you want to leave? Changes you made may not be saved.',
+                confirmLabel: 'Leave',
+                cancelLabel: 'Stay'
+            })
+    });
+
+    var deferred = $.Deferred();
+    confirmExitModal.render();
+
+    confirmExitModal.on('deny', function() {
+        deferred.reject();
+    });
+    confirmExitModal.on('confirmation', function() {
+        deferred.resolve();
+    });
+
+    return deferred.promise();
+}
 
 module.exports = {
     ModelingController: ModelingController
