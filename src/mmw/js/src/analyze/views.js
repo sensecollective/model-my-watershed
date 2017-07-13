@@ -869,7 +869,8 @@ var AnalyzeResultView = Marionette.LayoutView.extend({
     },
 
     ui: {
-        downloadCSV: '[data-action="download-csv"]'
+        downloadCSV: '[data-action="download-csv"]',
+        table: '.table-region'
     },
 
     events: {
@@ -879,46 +880,32 @@ var AnalyzeResultView = Marionette.LayoutView.extend({
     downloadCSV: function() {
         var data = this.model.get('categories'),
             timestamp = new Date().toISOString(),
-            filename,
-            nameMap,
-            renamedData;
+            filename = '';
 
         switch (this.model.get('name')) {
             case 'land':
-                filename = 'nlcd_land_cover_' + timestamp;
-                renamedData = utils.renameCSVColumns(data,
-                    constants.csvColumnMaps.nlcd);
+                filename = 'nlcd_land_cover_';
                 break;
             case 'soil':
-                filename = 'nlcd_soils_' + timestamp;
-                renamedData = utils.renameCSVColumns(data,
-                    constants.csvColumnMaps.soil);
+                filename = 'nlcd_soils_';
                 break;
             case 'animals':
-                filename = 'animal_estimate_' + timestamp;
-                renamedData = utils.renameCSVColumns(data,
-                    constants.csvColumnMaps.animals);
+                filename = 'animal_estimate_';
                 break;
             case 'pointsource':
-                filename = 'pointsource_' + timestamp;
-                renamedData = utils.renameCSVColumns(data,
-                    constants.csvColumnMaps.pointSource);
+                filename = 'pointsource_';
                 break;
             case 'catchment_water_quality':
-                filename = 'catchment_water_quality_' + timestamp;
-                renamedData = _.map(data, function(element) {
-                    return _.omit(element, 'geom');
-                });
-                renamedData = utils.renameCSVColumns(renamedData,
-                    constants.csvColumnMaps.waterQuality);
+                filename = 'catchment_water_quality_';
                 break;
             default:
-                filename = this.model.get('name') + '_' + timestamp;
+                filename = this.model.get('name');
                 nameMap = {};
                 renamedData = data;
         }
 
-        utils.downloadDataCSV(renamedData, filename);
+        filename = filename + timestamp;
+        this.ui.table.tableExport({ type: 'csv', fileName: filename });
     },
 
     showAnalyzeResults: function(CategoriesToCensus, AnalyzeTableView,
