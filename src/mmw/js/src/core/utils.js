@@ -417,31 +417,6 @@ var utils = {
         return geom;
     },
 
-    downloadDataCSV: function(data, filename) {
-        var csv = papaparse.unparse(JSON.stringify(data)),
-            blob = new Blob([csv], { type: 'text/csv' }),
-            url = window.URL.createObjectURL(blob),
-            tmpLink = document.createElement('a');
-
-        tmpLink.href = url;
-        tmpLink.setAttribute('download', filename + '.csv');
-        tmpLink.setAttribute('target', '_blank');
-        document.body.appendChild(tmpLink);
-        tmpLink.click();
-        document.body.removeChild(tmpLink);
-    },
-
-    renameCSVColumns: function(data, nameMap) {
-        return _.map(data, function(row) {
-            var newRow = {};
-            _.each(row, function(value, key) {
-                var newKey = nameMap[key] || key;
-                newRow[newKey] = value;
-            });
-            return newRow;
-        });
-    },
-
     calculateVisibleRows: function(minScreenHeight, avgRowHeight, minRows) {
         var screenHeight = document.documentElement.clientHeight;
         if (screenHeight <= minScreenHeight) {
