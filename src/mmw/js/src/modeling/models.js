@@ -10,7 +10,9 @@ var $ = require('jquery'),
     coreModels = require('../core/models'),
     turfArea = require('turf-area'),
     turfErase = require('turf-erase'),
-    turfIntersect = require('turf-intersect');
+    turfIntersect = require('turf-intersect'),
+    AoiVolumeModel = require('./tr55/models').AoiVolumeModel,
+    round = utils.toRoundedLocaleString;
 
 var ModelPackageControlModel = Backbone.Model.extend({
     defaults: {
@@ -80,7 +82,127 @@ var ResultModel = Backbone.Model.extend({
         polling: false, // True if currently polling
         active: false, // True if currently selected in Compare UI
         activeVar: null // For GWLFE, the currently selected variable in the UI
-    }
+    },
+
+    toTR55RunoffCSV: function(isCurrentConditions, aoiVolumeModel) {
+        var rows = ['"Runoff Partition","Water Depth (cm)","Water Volume (m3)"'],
+            resultKey = isCurrentConditions ? 'unmodified' : 'modified',
+            result = this.get('result')['runoff'][resultKey],
+            labels = [['runoff', 'Runoff'],
+                      ['et'    , 'Evapotranspiration'],
+                      ['inf'   , 'Infiltration']];
+
+        return rows.concat(labels.map(function(label) {
+            var key = label[0],
+                partition = label[1],
+                depth = result[key],
+                volume = aoiVolumeModel.adjust(depth),
+                row = [
+                        partition,
+                        round(depth, 3),
+                        round(volume, 2)
+                    ].join('","');
+
+            return '"' + row + '"';
+        })).join('\n');
+    },
+
+    toTR55WaterQualityCSV: function(isCurrentConditions, aoiVolumeModel) {
+        var rows = ['"Quality Measure","Load (kg)","Loading Rate (kg/ha)","Average Concentration (mg/L)"'],
+            resultKey = isCurrentConditions ? 'unmodified' : 'modified',
+            results = this.get('result')['quality'][resultKey];
+
+        return rows.concat(results.map(function(result) {
+            var load = result.load,
+                loadingRate = aoiVolumeModel.getLoadingRate(load),
+                adjustedRunoff = aoiVolumeModel.adjust(result.runoff),
+                concentration = adjustedRunoff ? load / adjustedRunoff : 0,
+                row = [
+                        result.measure,
+                        round(load, 3),
+                        round(loadingRate, 3),
+                        round(concentration, 1)
+                    ].join('","');
+
+            return '"' + row + '"';
+        })).join('\n');
+    },
+
+    toMapShedHydrologyCSV: function() {
+        var rows = ['Month,"Precip (cm)","ET (cm)","Surface Runoff (cm)","Subsurface Flow (cm)","Point Src Flow (cm)","Stream Flow (cm)"'],
+            runoffVars = [
+                    'AvPrecipitation',
+                    'AvEvapoTrans',
+                    'AvRunoff',
+                    'AvGroundWater',
+                    'AvPtSrcFlow',
+                    'AvStreamFlow',
+                ],
+            monthNames = [
+                    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+                ],
+            results = this.get('result')['monthly'];
+
+        // Monthly rows
+        rows = rows.concat(results.map(function(result, i) {
+            var cols = [monthNames[i]].concat(runoffVars.map(function(runoffVar) {
+                    return round(result[runoffVar], 2);
+                })).join('","');
+
+            return '"' + cols + '"';
+        }));
+
+        // Total row
+        var totalCols = ['Total'].concat(runoffVars.map(function(runoffVar) {
+                var total = 0;
+                for (var i = 0; i < 12; i++) {
+                    total += results[i][runoffVar];
+                }
+
+                return round(total, 2);
+            })).join('","'),
+            totals = '"' + totalCols + '"';
+
+        return rows.concat([totals]).join('\n');
+    },
+
+    toMapShedWaterQualityLandUseCSV: function() {
+        var rows = ['Sources,"Sediment (kg)","Total Nitrogen (kg)","Total Phosphorus (kg)"'],
+            results = this.get('result')['Loads'];
+
+        return rows.concat(results.map(function(result) {
+            var cols = [
+                    result.Source,
+                    round(result.Sediment, 1),
+                    round(result.TotalN, 1),
+                    round(result.TotalP, 1)
+                ].join('","');
+
+            return '"' + cols + '"';
+        })).join('\n');
+    },
+
+    toMapShedWaterQualitySummaryCSV: function() {
+        var rows = ['Sources,Sediment,"Total Nitrogen","Total Phosphorus","Mean Flow (m3/year)","Mean Flow (m3/s)"'],
+            result = this.get('result');
+
+        return rows.concat(result.SummaryLoads.map(function(sl) {
+            var isTotal = sl.Source === "Total Loads",
+                meanFlow = isTotal ? round(result.MeanFlow, 0) : '',
+                meanFlowPerSecond = isTotal ? round(result.MeanFlowPerSecond, 2) : '',
+                cols = [
+                        sl.Source + ' (' + sl.Unit + ')',
+                        round(sl.Sediment, isTotal ? 1 : 2),
+                        round(sl.TotalN, isTotal ? 1 : 2),
+                        round(sl.TotalP, isTotal ? 1 : 2),
+                        meanFlow,
+                        meanFlowPerSecond,
+                    ].join('","');
+
+                return '"' + cols + '"';
+        })).join('\n');
+    },
 });
 
 var ResultCollection = Backbone.Collection.extend({
@@ -438,71 +560,47 @@ var ProjectModel = Backbone.Model.extend({
                         };
                     }),
                     scenarios = self.get('scenarios'),
-                    currentScenario = scenarios.getActiveScenario(),
                     lowerAndHyphenate = function(name) {
                         return name.toLowerCase().replace(/\s/g, '-');
                     },
-                    modelName = (function() {
-                        switch(self.get('model_package')) {
-                            case utils.GWLFE:
-                                return "model_multiyear_";
-                            case utils.TR55_PACKAGE:
-                                return "model_sitestorm_";
-                            default:
-                                return "model_";
-                        }
-                    })(),
+                    isTR55 = self.get('model_package') === utils.TR55_PACKAGE,
+                    modelName = isTR55 ? "model_sitestorm_" : "model_multiyear_",
+                    aoiVolumeModel = isTR55 ? new AoiVolumeModel({
+                            areaOfInterest: App.map.get('areaOfInterest')
+                        }) : null,
                     modelFiles = _.flatten(scenarios.map(function(s) {
-                        // Cycle through all the scenarios
-                        scenarios.setActiveScenario(s);
+                        var scenarioName = lowerAndHyphenate(s.get('name')),
+                            results = s.get('results'),
+                            isCurrentConditions = s.get('is_current_conditions');
 
-                        // Capture contents of every model results table
-                        return $('.fixed-table-body > .model-results-table').map(function() {
-                            var $this = $(this),
-                                scenarioName = lowerAndHyphenate(s.get('name')) + '_',
-                                tableName = $this.find('tbody').attr('data-mmw-table'),
-                                contents = $this.tableExport({
-                                    outputMode: 'string',
-                                    type: 'csv'
-                                });
-
-                            if (tableName === 'waterquality-summary') {
-                                // Add Mean Flow to Watery Quality Summary results
-                                var result = s.get('results')
-                                              .findWhere({ name: 'quality' })
-                                              .get('result'),
-                                    rows = contents.split('\n'),
-                                    // undefined picks up locale from browser. Options round to 0 decimal places.
-                                    meanFlow = result.MeanFlow.toLocaleString(undefined, { maximumFractionDigits: 0 }),
-                                    // undefined picks up locale from browser. Options round to 2 decimal places.
-                                    meanFlowPerSecond = result.MeanFlowPerSecond.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-                                // Add Mean Flow labels to header row
-                                rows[0] += ',"Mean Flow (m3/year)","Mean Flow (m3/s)"';
-
-                                // Add Mean Flow values to Total Loads row
-                                // Add empty values to all other rows
-                                // except the final empty line
-                                for (var i = 1; i < rows.length - 1; i++) {
-                                    if (rows[i].startsWith('"Total Loads')) {
-                                        rows[i] += ',"' + meanFlow + '"' +
-                                                   ',"' + meanFlowPerSecond + '"';
-                                    } else {
-                                        rows[i] += ',,';
-                                    }
-                                }
-
-                                contents = rows.join('\n');
-                            }
-
-                            return {
-                                name: modelName +
-                                      scenarioName +
-                                      tableName +
-                                      '.csv',
-                                contents: contents,
-                            };
-                        }).toArray();
+                        return isTR55 ?
+                            [{
+                                name: modelName + scenarioName + '_runoff.csv',
+                                contents: results
+                                    .findWhere({ name: 'runoff' })
+                                    .toTR55RunoffCSV(isCurrentConditions, aoiVolumeModel),
+                            }, {
+                                name: modelName + scenarioName + '_quality.csv',
+                                contents: results
+                                    .findWhere({ name: 'quality' })
+                                    .toTR55WaterQualityCSV(isCurrentConditions, aoiVolumeModel),
+                            }] :
+                            [{
+                                name: modelName + scenarioName + '_hydrology.csv',
+                                contents: results
+                                    .findWhere({ name: 'runoff' })
+                                    .toMapShedHydrologyCSV(),
+                            }, {
+                                name: modelName + scenarioName + '_waterquality-landuse.csv',
+                                contents: results
+                                    .findWhere({ name: 'quality' })
+                                    .toMapShedWaterQualityLandUseCSV(),
+                            }, {
+                                name: modelName + scenarioName + '_waterquality-summary.csv',
+                                contents: results
+                                    .findWhere({ name: 'quality' })
+                                    .toMapShedWaterQualitySummaryCSV(),
+                            }];
                     })),
                     getMapshedData = function(scenario) {
                         var gisData = scenario.getGisData();
@@ -515,13 +613,7 @@ var ProjectModel = Backbone.Model.extend({
                             data: gisData.model_input
                         };
                     },
-                    includeMapShedData = self.get('model_package') === utils.GWLFE,
-                    mapshedData = includeMapShedData ?
-                                    scenarios.map(getMapshedData) :
-                                    [];
-
-                // Restore pre-selected scenario after generating model exports
-                scenarios.setActiveScenario(currentScenario);
+                    mapshedData = isTR55 ? [] : scenarios.map(getMapshedData);
 
                 deferred.resolve({
                     files: analyzeFiles.concat(modelFiles),
